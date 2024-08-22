@@ -393,6 +393,9 @@ _PRETRAINED = {
     "ViT-B-16-SigLIP": dict(
         webli=_slpcfg(hf_hub='timm/ViT-B-16-SigLIP/'),
     ),
+    "GeoLB-ViT-B-16-SigLIP": dict(
+        webli=_slpcfg(hf_hub='XShadow/GeoLB-ViT-B-16-SigLIP/'),
+    ),
     "ViT-B-16-SigLIP-256": dict(
         webli=_slpcfg(hf_hub='timm/ViT-B-16-SigLIP-256/'),
     ),

@@ -4,6 +4,9 @@ Wraps timm (https://github.com/rwightman/pytorch-image-models) models for use as
 """
 import logging
 from collections import OrderedDict
+from timm.models.registry import register_model
+from timm.models.vision_transformer import VisionTransformer
+from .dofa_patch_embed import DOFA_PatchEmbed
 
 import torch
 import torch.nn as nn
@@ -23,6 +26,45 @@ except ImportError:
     timm = None
 
 from .utils import freeze_batch_norm_2d
+
+class GeoLB_VisionTransformer(VisionTransformer):
+    def __init__(self, img_size=224, patch_size=16, embed_dim=768, *args, **kwargs):
+        super().__init__(img_size=img_size, patch_size=patch_size, in_chans=3, embed_dim=embed_dim, *args, **kwargs)
+        # Replace the original patch embedding
+        self.patch_embed = DOFA_PatchEmbed(wv_planes=128, inter_dim=128, kernel_size=patch_size, embed_dim=embed_dim)
+        self.head = nn.Identity()
+        self.fc_norm = nn.Identity()
+
+    def forward_features(self, x, wvs):
+        x, waves_tensor = self.patch_embed(x, wvs)
+        x = self._pos_embed(x)
+        x = self.patch_drop(x)
+        x = self.norm_pre(x)
+        x = self.blocks(x)
+        x = self.norm(x)
+        return x, waves_tensor
+
+    def forward(self, x, wvs):
+        if wvs==None:
+            wvs = torch.tensor([0.665, 0.560, 0.490], device=x.device)
+            #RGB channels by default
+        x, waves_tensor = self.forward_features(x, wvs)
+        x = self.attn_pool(x)
+        x = self.fc_norm(x)
+        x = self.head_drop(x)
+        x = self.head(x)
+        return x, waves_tensor
+
+@register_model
+def dofa_vit_base_patch16_siglip_224(pretrained=False, **kwargs):
+    model_args = dict(
+        patch_size=16, embed_dim=768, depth=12, num_heads=12, class_token=False, global_pool='map',
+    )
+    model = GeoLB_VisionTransformer(**model_args)
+    #if pretrained:
+    #    checkpoint = torch.load('/path/to/dofa_vit_base_patch16_siglip_224.pth')
+    #    model.load_state_dict(checkpoint)
+    return model
 
 
 class TimmModel(nn.Module):
@@ -62,13 +104,16 @@ class TimmModel(nn.Module):
             # use network classifier head as projection if no proj specified and no custom pooling used
             # if projection is explicitly set to "none" will be pass through from network trunk
             proj_dim = 0 if proj == 'none' else embed_dim
-            self.trunk = timm.create_model(
-                model_name,
-                num_classes=proj_dim,
-                global_pool=pool,
-                pretrained=pretrained,
-                **timm_kwargs,
-            )
+            if "dofa" in model_name:
+                self.trunk = timm.create_model(model_name, pretrained=True)
+            else:
+                self.trunk = timm.create_model(
+                    model_name,
+                    num_classes=proj_dim,
+                    global_pool=pool,
+                    pretrained=pretrained,
+                    **timm_kwargs,
+                )
             prev_chs = embed_dim
         else:
             self.trunk = timm.create_model(
