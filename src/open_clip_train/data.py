@@ -30,6 +30,11 @@ class CsvDataset(Dataset):
     def __init__(self, input_filename, transforms, img_key, caption_key, sep="\t", tokenizer=None):
         logging.debug(f'Loading csv data from {input_filename}.')
         df = pd.read_csv(input_filename, sep=sep)
+        self.DATA_ROOT = ""
+        if "Seg-4" in input_filename:
+            self.DATA_ROOT = "remote_clip/data/Seg-4/"
+        if "ucm_test" in input_filename:
+            self.DATA_ROOT = "remote_clip/data/Ret-3_test/"
 
         self.images = df[img_key].tolist()
         self.captions = df[caption_key].tolist()
@@ -42,7 +47,7 @@ class CsvDataset(Dataset):
         return len(self.captions)
 
     def __getitem__(self, idx):
-        images = self.transforms(Image.open(str(self.images[idx])))
+        images = self.transforms(Image.open(self.DATA_ROOT+str(self.images[idx])))
         texts = self.tokenize([str(self.captions[idx])])[0]
         return images, texts
 
@@ -342,13 +347,13 @@ def get_wds_dataset(args, preprocess_img, is_train, epoch=0, floor=False, tokeni
                     'Please specify it via `--train-num-samples` if no dataset length info is present.')
     else:
         # Eval will just exhaust the iterator if the size is not specified.
-        num_samples = args.val_num_samples or 0 
+        num_samples = args.val_num_samples or 0
 
     shared_epoch = SharedEpoch(epoch=epoch)  # create a shared epoch store to sync epoch to dataloader worker proc
 
     if is_train and args.train_data_upsampling_factors is not None:
         assert resampled, "--train_data_upsampling_factors is only supported when sampling with replacement (with --dataset-resampled)."
-    
+
     if resampled:
         pipeline = [ResampledShards2(
             input_shards,
@@ -541,7 +546,7 @@ def get_dataset_fn(data_path, dataset_type):
                 f"Tried to figure out dataset type, but failed for extension {ext}.")
     else:
         raise ValueError(f"Unsupported dataset type: {dataset_type}")
-    
+
 
 def get_data(args, preprocess_fns, epoch=0, tokenizer=None):
     preprocess_train, preprocess_val = preprocess_fns
