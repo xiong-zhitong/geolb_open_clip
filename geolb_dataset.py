@@ -392,11 +392,14 @@ if __name__=="__main__":
     tmodel = "openai/clip-vit-large-patch14"
     tmodel = 'facebook/dinov2-large'
     tmodel = "google/vit-huge-patch14-224-in21k"
-    dataloader = dataloaders[tmodel]
+    feature_loader = dataloaders[tmodel]
+    image_loader = dataloaders["image"]
 
     cnt = 0
-    for data in dataloader:
-        print(data[tmodel]["embedding"].shape)
+    for images, features in zip(image_loader,feature_loader):
+        print(images["image"].shape)
+        print(images["text"])
+        print(features[tmodel]["embedding"].shape)
         if cnt == 1:
             break
         cnt += 1
