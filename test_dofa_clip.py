@@ -9,13 +9,14 @@ import os
 from transformers import AutoTokenizer, AutoModel, AutoConfig
 from open_clip.push_to_hf_hub import save_for_hf, save_config_for_hf
 from open_clip import get_model_config
+from einops import rearrange
 
 # Load and modify the model
-model, preprocess = create_model_from_pretrained('hf-hub:XShadow/GeoLB-ViT-B-16-SigLIP')
-tokenizer = get_tokenizer('hf-hub:XShadow/GeoLB-ViT-B-16-SigLIP')
+#model, preprocess = create_model_from_pretrained('hf-hub:XShadow/GeoLB-ViT-B-16-SigLIP')
+#tokenizer = get_tokenizer('hf-hub:XShadow/GeoLB-ViT-B-16-SigLIP')
 
-#model, preprocess = create_model_from_pretrained('hf-hub:timm/ViT-SO400M-14-SigLIP')
-#tokenizer = get_tokenizer('hf-hub:timm/ViT-SO400M-14-SigLIP')
+model, preprocess = create_model_from_pretrained('hf-hub:timm/ViT-SO400M-14-SigLIP-384')
+tokenizer = get_tokenizer('hf-hub:timm/ViT-SO400M-14-SigLIP-384')
 
 def encode_image(model, image, wvs, normalize: bool = False):
     features = model.visual.trunk(image, wvs)
@@ -24,6 +25,16 @@ def encode_image(model, image, wvs, normalize: bool = False):
 image = Image.open(urlopen(
     'https://huggingface.co/datasets/huggingface/documentation-images/resolve/main/beignets-task-guide.png'
 ))
+
+
+intermediate_outputs = {}
+
+# Define the hook function
+def hook_fn(module, input, output):
+    intermediate_outputs['image_features'] = output
+
+model.visual.trunk.norm.register_forward_hook(hook_fn)
+
 
 #image = Image.open("download.png")
 
@@ -36,11 +47,15 @@ text = tokenizer(labels_list, context_length=model.context_length)
 text = text.cuda()
 model = model.cuda()
 
+pdb.set_trace()
 
 with torch.no_grad(), torch.cuda.amp.autocast():
     wvs = torch.tensor([0.665, 0.560, 0.490]).cuda()
-    image_features,_ = encode_image(model, image, wvs)
-    #image_features = model.encode_image(image)
+    #image_features,_ = encode_image(model, image, wvs)
+    image_features = model.encode_image(image)
+    feats = intermediate_outputs['image_features']
+    s_feats = rearrange(feats, "b (w h) c -> b c w h", w=27)
+    s_feats = torch.nn.functional.adaptive_avg_pool2d(s_feats, (4,4))
     text_features = model.encode_text(text)
     image_features = F.normalize(image_features, dim=-1)
     text_features = F.normalize(text_features, dim=-1)

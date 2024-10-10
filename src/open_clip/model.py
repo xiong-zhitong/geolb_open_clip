@@ -7,6 +7,7 @@ import logging
 import math
 from dataclasses import dataclass
 from typing import Any, Dict, Optional, Tuple, Union
+from loguru import logger
 
 import numpy as np
 import torch
@@ -21,6 +22,7 @@ from .timm_model import TimmModel
 from .transformer import LayerNormFp32, LayerNorm, QuickGELU, Attention, VisionTransformer, TextTransformer,\
     text_global_pool
 from .utils import to_2tuple
+from .utils import Interpolation
 
 
 @dataclass
@@ -263,7 +265,7 @@ class CLIP(nn.Module):
         self.transformer.grad_checkpointing = enable
 
     def encode_image(self, image, normalize: bool = False):
-        features = self.visual(image)
+        features, sfeats = self.visual(image)
         return F.normalize(features, dim=-1) if normalize else features
 
     def encode_text(self, text, normalize: bool = False):
@@ -354,12 +356,30 @@ class CustomTextCLIP(nn.Module):
         self.text.set_grad_checkpointing(enable)
 
     def encode_image(self, image, normalize: bool = False):
-        features = self.visual(image)
-        return F.normalize(features, dim=-1) if normalize else features
+        features, sfeats = self.visual(image)
+        logger.debug(sfeats.shape)
+        out = F.normalize(features, dim=-1) if normalize else features
+        return (out, sfeats)
 
     def encode_text(self, text, normalize: bool = False):
         features = self.text(text)
         return F.normalize(features, dim=-1) if normalize else features
+    
+    def get_translators(tfeat_shapes, pred_channel, cuda=True):
+        translators = {}
+        
+        for t in tfeat_shapes:
+            modules = []
+            _, hxw, ct = tfeat_shapes[t]
+            hw = int(math.sqrt(hxw))
+            modules.append(Interpolation((hw, hw)))
+            modules.append(nn.Linear(pred_channel, ct))
+            translator = nn.Sequential(*modules)
+            if cuda:
+                translator = translator.cuda()
+            translators[t] = translator
+
+        return translators
 
     def get_logits(self, image, text):
         image_features = self.encode_image(image, normalize=True)
@@ -375,12 +395,13 @@ class CustomTextCLIP(nn.Module):
             image: Optional[torch.Tensor] = None,
             text: Optional[torch.Tensor] = None,
     ):
-        image_features = self.encode_image(image, normalize=True) if image is not None else None
+        image_features, sfeats = self.encode_image(image, normalize=True) if image is not None else None
         text_features = self.encode_text(text, normalize=True) if text is not None else None
 
         if self.output_dict:
             out_dict = {
                 "image_features": image_features,
+                "sfeats": sfeats,
                 "text_features": text_features,
                 "logit_scale": self.logit_scale.exp()
             }

@@ -7,6 +7,7 @@ import sys
 import random
 from datetime import datetime
 from functools import partial
+from loguru import logger
 
 import numpy as np
 import torch
@@ -28,7 +29,10 @@ try:
 except ImportError:
     hvd = None
 
+
+import pdb
 from open_clip import create_model_and_transforms, trace_model, get_tokenizer, create_loss
+from open_clip import MDistillLoss
 from open_clip_train.data import get_data
 from open_clip_train.distributed import is_master, init_distributed_device, broadcast_object
 from open_clip_train.logger import setup_logging
@@ -360,6 +364,7 @@ def main(args):
         epoch=start_epoch,
         tokenizer=tokenizer,
     )
+    #pdb.set_trace()
     assert len(data), 'At least one train or eval dataset must be specified.'
 
     # create scheduler if train
@@ -428,6 +433,7 @@ def main(args):
         return
 
     loss = create_loss(args)
+    mdloss = MDistillLoss(1)
 
     for epoch in range(start_epoch, args.epochs):
         if is_master(args):

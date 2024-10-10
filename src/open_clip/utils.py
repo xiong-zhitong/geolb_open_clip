@@ -4,6 +4,30 @@ import collections.abc
 import torch
 from torch import nn as nn
 from torchvision.ops.misc import FrozenBatchNorm2d
+from einops import rearrange
+import math
+from torch.nn.functional import interpolate
+
+
+class Interpolation(nn.Module):
+    """Interpolation nn.Module wrap for nn.functional.interpolate.
+
+    Attributes:
+        target_size (tuple[int, int] | torch.Size): target spatial size of this interpolation.
+    """
+
+    def __init__(self, target_size: tuple[int, int] | torch.Size) -> None:
+        super().__init__()
+        self.target_size = target_size
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        """Very simple forward pass to call interpolate()."""
+        hw = int(math.sqrt(x.shape[1]))
+        x = rearrange(x, 'b (h w) c -> b c h w', h=hw, w=hw)
+        x = interpolate(x, self.target_size)
+        hw = int(x.shape[-1])
+        x = rearrange(x, 'b c h w -> b (h w) c', h=hw, w=hw)
+        return x
 
 
 def freeze_batch_norm_2d(module, module_match={}, name=''):

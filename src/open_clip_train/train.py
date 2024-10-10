@@ -3,6 +3,8 @@ import logging
 import math
 import os
 import time
+import pdb
+from loguru import logger
 
 import numpy as np
 import torch
@@ -72,6 +74,7 @@ def train_one_epoch(model, data, loss, epoch, optimizer, scaler, scheduler, dist
 
     data['train'].set_epoch(epoch)  # set epoch in process safe manner via sampler or shared_epoch
     dataloader = data['train'].dataloader
+    featureloader = data['train'].featureloader
     num_batches_per_epoch = dataloader.num_batches // args.accum_freq
     sample_digits = math.ceil(math.log(dataloader.num_samples + 1, 10))
 
@@ -79,19 +82,32 @@ def train_one_epoch(model, data, loss, epoch, optimizer, scaler, scheduler, dist
         accum_images, accum_texts, accum_features = [], [], {}
 
     losses_m = {}
+    #logger.debug("Debug using pdb set_trace")
+    #pdb.set_trace()
     batch_time_m = AverageMeter()
     data_time_m = AverageMeter()
     end = time.time()
-    for i, batch in enumerate(dataloader):
+    for i, (batch, fbatch) in enumerate(zip(dataloader, featureloader)):
         i_accum = i // args.accum_freq
         step = num_batches_per_epoch * epoch + i_accum
 
         if not args.skip_scheduler:
             scheduler(step)
 
-        images, texts = batch
+        images, texts = None, None
+        tfeats = None
+        if isinstance(batch, dict):
+            images, texts = batch["image"], batch["text"]
+            tmodel = "openai/clip-vit-large-patch14"
+            tmodel = 'facebook/dinov2-large'
+            tmodel = "google/vit-huge-patch14-224-in21k"
+            tfeats = fbatch[tmodel]["embedding"]
+            texts = texts.squeeze()
+        else:
+            images, texts = batch
         images = images.to(device=device, dtype=input_dtype, non_blocking=True)
         texts = texts.to(device=device, non_blocking=True)
+        tfeats = tfeats.to(device=device, non_blocking=True)
 
         data_time_m.update(time.time() - end)
         optimizer.zero_grad()
@@ -99,6 +115,7 @@ def train_one_epoch(model, data, loss, epoch, optimizer, scaler, scheduler, dist
         if args.accum_freq == 1:
             with autocast():
                 model_out = model(images, texts)
+                pdb.set_trace()
                 logit_scale = model_out["logit_scale"]
                 if args.distill:
                     with torch.no_grad():
@@ -113,7 +130,7 @@ def train_one_epoch(model, data, loss, epoch, optimizer, scaler, scheduler, dist
         else:
             # First, cache the features without any gradient tracking.
             with torch.no_grad():
-                with autocast():
+                with torch.amp.autocast():
                     model_out = model(images, texts)
 
                     for f in ("logit_scale", "logit_bias"):
@@ -140,7 +157,7 @@ def train_one_epoch(model, data, loss, epoch, optimizer, scaler, scheduler, dist
             for j in range(args.accum_freq):
                 images = accum_images[j]
                 texts = accum_texts[j]
-                with autocast():
+                with torch.amp.autocast():
                     model_out = model(images, texts)
 
                     inputs_no_accum = {}

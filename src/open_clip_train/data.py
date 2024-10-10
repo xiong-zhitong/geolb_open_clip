@@ -8,6 +8,7 @@ import sys
 import braceexpand
 from dataclasses import dataclass
 from multiprocessing import Value
+from loguru import logger
 
 import numpy as np
 import pandas as pd
@@ -24,6 +25,9 @@ try:
     import horovod.torch as hvd
 except ImportError:
     hvd = None
+
+
+from .geolb_dataset import get_RGB_dataset, get_RGB_dataloader
 
 
 class CsvDataset(Dataset):
@@ -66,6 +70,7 @@ class SharedEpoch:
 @dataclass
 class DataInfo:
     dataloader: DataLoader
+    featureloader: DataLoader = None
     sampler: DistributedSampler = None
     shared_epoch: SharedEpoch = None
 
@@ -330,6 +335,54 @@ class ResampledShards2(IterableDataset):
                 yield dict(url=self.rng.choices(self.urls, weights=self.weights, k=1)[0])
 
 
+
+def get_geolb_dataset(args, preprocess_img, is_train, epoch=0, floor=False, tokenizer=None):
+    BS = args.batch_size
+
+    dataset, _ = get_RGB_dataset(dataset_root=args.train_data,
+        feature_models = ["facebook/dinov2-large", "openai/clip-vit-large-patch14", "google/vit-huge-patch14-224-in21k"],
+        dataset_mix = ["Seg4"],
+        dataset_ratio = 1.0,
+        image_transform = preprocess_img,
+        tokenizer = tokenizer,
+        feature_norm = False,
+        seed = 42,
+        shuffle = False,
+        world_size = 1)
+    
+    dataloaders = get_RGB_dataloader(datasets=dataset,
+        batch_size = BS,
+        shuffle = False,
+        shuffle_buffer_size = 1_000,
+        seed = 42,)
+        
+    tmodel = "openai/clip-vit-large-patch14"
+    tmodel = 'facebook/dinov2-large'
+    tmodel = "google/vit-huge-patch14-224-in21k"
+
+    shared_epoch = SharedEpoch(epoch=epoch)
+
+    feature_loader = dataloaders[tmodel]
+    image_loader = dataloaders["image"]
+
+    N_samples = 41_172
+    num_batches = N_samples // BS
+
+    image_loader.num_batches = num_batches
+    image_loader.num_samples = 41_172
+
+    feature_loader.num_batches = num_batches
+    feature_loader.num_samples = 41_172
+
+    #for images, features in zip(image_loader,feature_loader):
+    #    print(images["image"].shape)
+    #    print(images["text"])
+    #    print(features[tmodel]["embedding"].shape)
+
+    return DataInfo(image_loader, feature_loader, shared_epoch)
+
+
+
 def get_wds_dataset(args, preprocess_img, is_train, epoch=0, floor=False, tokenizer=None):
     input_shards = args.train_data if is_train else args.val_data
     assert input_shards is not None
@@ -531,6 +584,8 @@ def get_synthetic_dataset(args, preprocess_fn, is_train, epoch=0, tokenizer=None
 def get_dataset_fn(data_path, dataset_type):
     if dataset_type == "webdataset":
         return get_wds_dataset
+    elif dataset_type == "geolb":
+        return get_geolb_dataset
     elif dataset_type == "csv":
         return get_csv_dataset
     elif dataset_type == "synthetic":

@@ -1,6 +1,10 @@
 import torch
 import torch.nn as nn
 from torch.nn import functional as F
+import pdb
+import math
+from einops import rearrange
+from loguru import logger
 
 try:
     import torch.distributed.nn
@@ -131,6 +135,35 @@ class ClipLoss(nn.Module):
         return {"contrastive_loss": total_loss} if output_dict else total_loss
 
 
+class MDistillLoss(nn.Module):
+    def __init__(self, scale=0.1):
+        super(MDistillLoss, self).__init__()
+        self.scale = scale
+        # loss
+        self.mse_loss = nn.MSELoss()
+        self.l1_loss = nn.SmoothL1Loss()
+        self.cos_loss = nn.CosineEmbeddingLoss()
+        self.cos_target = torch.ones((1), dtype=torch.int, requires_grad=False)
+
+    def forward(self, pred_feats: dict[str, torch.Tensor], tfeats: dict[str, torch.Tensor], translators) -> dict[str, Any]:
+        for t in tfeats:
+            #pdb.set_trace()
+            pred = pred_feats
+            target = tfeats[t]
+            translator = translators[t]
+            t_pred = translator(pred)
+            cos_target = self.cos_target.repeat(pred.size(0)).to(pred.device)
+            
+            mse_loss = self.mse_loss(t_pred, target)
+            l1_loss = self.l1_loss(t_pred, target)
+            
+            pred_norm = F.normalize(t_pred.flatten(start_dim=1), dim=1, p=2)
+            target_norm = F.normalize(target.flatten(start_dim=1), dim=1, p=2)
+            cos_loss = self.cos_loss(pred_norm, target_norm, cos_target)
+            
+        return self.scale * (mse_loss + l1_loss + cos_loss)
+    
+
 class CoCaLoss(ClipLoss):
     def __init__(
             self,
@@ -178,6 +211,7 @@ class CoCaLoss(ClipLoss):
 
 
 class DistillClipLoss(ClipLoss):
+    
 
     def dist_loss(self, teacher_logits, student_logits):
         return -(teacher_logits.softmax(dim=1) * student_logits.log_softmax(dim=1)).sum(dim=1).mean(dim=0)
@@ -412,3 +446,32 @@ class SigLipLoss(nn.Module):
                     text_features_to_right = text_features_from_left
 
         return {"contrastive_loss": loss} if output_dict else loss
+
+
+if __name__ == '__main__':
+    mdloss = MDistillLoss(1).cuda()
+    pred_feats = torch.randn((2, 196, 1280)).cuda()
+    t_feats = {'f1':torch.randn((2, 256, 768)).cuda(), 'f2':torch.randn((2, 256,768)).cuda()}
+    
+    pred_channel = pred_feats.shape[-1]
+
+    def get_translators(tfeat_shapes, pred_channel, cuda=True):
+        translators = {}
+        
+        for t in t_feats:
+            modules = []
+            _, hxw, ct = tfeat_shapes[t]
+            hw = int(math.sqrt(hxw))
+            modules.append(Interpolation((hw, hw)))
+            modules.append(nn.Linear(pred_channel, ct))
+            translator = nn.Sequential(*modules)
+            if cuda:
+                translator = translator.cuda()
+            translators[t] = translator
+
+        return translators
+
+    tfeat_shapes = {'f1':(2, 256, 768), 'f2': (2, 256, 768)}
+    translators = get_translators(tfeat_shapes, pred_channel)
+    loss = mdloss(pred_feats, t_feats, translators)
+    print(loss)

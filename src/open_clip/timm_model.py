@@ -9,6 +9,7 @@ from timm.models.vision_transformer import VisionTransformer
 from .dofa_patch_embed import DOFA_PatchEmbed
 
 import torch
+from loguru import logger
 import torch.nn as nn
 
 try:
@@ -42,18 +43,19 @@ class GeoLB_VisionTransformer(VisionTransformer):
         x = self.norm_pre(x)
         x = self.blocks(x)
         x = self.norm(x)
-        return x, waves_tensor
+        return x
 
     def forward(self, x, wvs):
         if wvs==None:
             wvs = torch.tensor([0.665, 0.560, 0.490], device=x.device)
             #RGB channels by default
-        x, waves_tensor = self.forward_features(x, wvs)
+        x = self.forward_features(x, wvs)
+        sfeats = x
         x = self.attn_pool(x)
         x = self.fc_norm(x)
         x = self.head_drop(x)
         x = self.head(x)
-        return x, waves_tensor
+        return x, sfeats
 
 @register_model
 def dofa_vit_base_patch16_siglip_224(pretrained=False, **kwargs):
@@ -88,6 +90,7 @@ class TimmModel(nn.Module):
         if timm is None:
             raise RuntimeError("Please `pip install timm` to use timm models.")
         self.image_size = to_2tuple(image_size)
+        self.DOFA = False
 
         # setup kwargs that may not be common across all models
         timm_kwargs = {}
@@ -106,6 +109,7 @@ class TimmModel(nn.Module):
             proj_dim = 0 if proj == 'none' else embed_dim
             if "dofa" in model_name:
                 self.trunk = timm.create_model(model_name, pretrained=True)
+                self.DOFA = True
             else:
                 self.trunk = timm.create_model(
                     model_name,
@@ -191,7 +195,11 @@ class TimmModel(nn.Module):
         except Exception as e:
             logging.warning('grad checkpointing not supported for this timm image tower, continuing without...')
 
-    def forward(self, x):
-        x = self.trunk(x)
+    def forward(self, x, wvs=None):
+        if self.DOFA:
+            x, sfeats = self.trunk(x, wvs)
+        else:
+            x = self.trunk(x)
         x = self.head(x)
-        return x
+        logger.debug(sfeats.shape)
+        return x, sfeats
