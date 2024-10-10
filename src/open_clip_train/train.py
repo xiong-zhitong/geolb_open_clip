@@ -16,7 +16,7 @@ try:
 except ImportError:
     wandb = None
 
-from open_clip import get_input_dtype, CLIP, CustomTextCLIP
+from open_clip import get_input_dtype, CLIP, CustomTextCLIP, MDistillLoss
 from open_clip_train.distributed import is_master
 from open_clip_train.zero_shot import zero_shot_eval
 from open_clip_train.precision import get_autocast
@@ -63,7 +63,7 @@ def backward(total_loss, scaler):
         total_loss.backward()
 
 
-def train_one_epoch(model, data, loss, epoch, optimizer, scaler, scheduler, dist_model, args, tb_writer=None):
+def train_one_epoch(model, data, loss, mdloss, epoch, optimizer, scaler, scheduler, dist_model, args, tb_writer=None):
     device = torch.device(args.device)
     autocast = get_autocast(args.precision)
     input_dtype = get_input_dtype(args.precision)
@@ -74,7 +74,10 @@ def train_one_epoch(model, data, loss, epoch, optimizer, scaler, scheduler, dist
 
     data['train'].set_epoch(epoch)  # set epoch in process safe manner via sampler or shared_epoch
     dataloader = data['train'].dataloader
-    featureloader = data['train'].featureloader
+    clip_feature_loader = data['train'].clip_feature_loader
+    dinov2_feature_loader = data['train'].dinov2_feature_loader
+    imagenet_feature_loader = data['train'].imagenet_feature_loader
+
     num_batches_per_epoch = dataloader.num_batches // args.accum_freq
     sample_digits = math.ceil(math.log(dataloader.num_samples + 1, 10))
 
@@ -83,11 +86,12 @@ def train_one_epoch(model, data, loss, epoch, optimizer, scaler, scheduler, dist
 
     losses_m = {}
     #logger.debug("Debug using pdb set_trace")
-    #pdb.set_trace()
+    tmodels = ["openai/clip-vit-large-patch14", 'facebook/dinov2-large', "google/vit-huge-patch14-224-in21k"]
     batch_time_m = AverageMeter()
     data_time_m = AverageMeter()
     end = time.time()
-    for i, (batch, fbatch) in enumerate(zip(dataloader, featureloader)):
+    for i, (batch, fbatch1, fbatch2, fbatch3) in enumerate(zip(dataloader, clip_feature_loader, dinov2_feature_loader, imagenet_feature_loader)):
+
         i_accum = i // args.accum_freq
         step = num_batches_per_epoch * epoch + i_accum
 
@@ -95,19 +99,23 @@ def train_one_epoch(model, data, loss, epoch, optimizer, scaler, scheduler, dist
             scheduler(step)
 
         images, texts = None, None
-        tfeats = None
+        tfeats = {}
+        tfeat_shapes = {}
         if isinstance(batch, dict):
             images, texts = batch["image"], batch["text"]
-            tmodel = "openai/clip-vit-large-patch14"
-            tmodel = 'facebook/dinov2-large'
-            tmodel = "google/vit-huge-patch14-224-in21k"
-            tfeats = fbatch[tmodel]["embedding"]
+            for tmodel, fbatch in zip(tmodels, [fbatch1, fbatch2, fbatch3]):
+                tfeat = fbatch[tmodel]["embedding"]
+                tfeats[tmodel] = tfeat.to(device=device, non_blocking=True)
+                tfeat_shapes[tmodel] = tfeat.shape
+
             texts = texts.squeeze()
         else:
             images, texts = batch
         images = images.to(device=device, dtype=input_dtype, non_blocking=True)
         texts = texts.to(device=device, non_blocking=True)
-        tfeats = tfeats.to(device=device, non_blocking=True)
+        #get teacher feature shapes: tfeat_shapes
+        #get translators
+        translators = model.get_translators(tfeat_shapes, pred_channel=768)
 
         data_time_m.update(time.time() - end)
         optimizer.zero_grad()
@@ -115,7 +123,8 @@ def train_one_epoch(model, data, loss, epoch, optimizer, scaler, scheduler, dist
         if args.accum_freq == 1:
             with autocast():
                 model_out = model(images, texts)
-                pdb.set_trace()
+                # calculate mdloss
+                multi_distill_loss = mdloss(model_out["sfeats"], tfeats, translators)
                 logit_scale = model_out["logit_scale"]
                 if args.distill:
                     with torch.no_grad():
@@ -123,8 +132,9 @@ def train_one_epoch(model, data, loss, epoch, optimizer, scaler, scheduler, dist
                     model_out.update({f'dist_{k}': v for k, v in dist_model_out.items()})
                 losses = loss(**model_out, output_dict=True)
 
-                total_loss = sum(losses.values())
+                total_loss = sum(losses.values()) + multi_distill_loss
                 losses["loss"] = total_loss
+                losses["mdloss"] = multi_distill_loss
 
             backward(total_loss, scaler)
         else:

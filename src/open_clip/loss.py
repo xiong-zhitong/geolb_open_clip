@@ -5,6 +5,7 @@ import pdb
 import math
 from einops import rearrange
 from loguru import logger
+from typing import Any
 
 try:
     import torch.distributed.nn
@@ -391,7 +392,7 @@ class SigLipLoss(nn.Module):
         loss = -F.logsigmoid(labels * logits).sum() / image_features.shape[0]
         return loss
 
-    def forward(self, image_features, text_features, logit_scale, logit_bias, output_dict=False):
+    def forward(self, image_features, sfeats, text_features, logit_scale, logit_bias, output_dict=False):
         loss = self._loss(image_features, text_features, logit_scale, logit_bias)
 
         if self.world_size > 1:

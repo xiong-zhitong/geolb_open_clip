@@ -9,6 +9,7 @@ import braceexpand
 from dataclasses import dataclass
 from multiprocessing import Value
 from loguru import logger
+import pdb
 
 import numpy as np
 import pandas as pd
@@ -70,7 +71,9 @@ class SharedEpoch:
 @dataclass
 class DataInfo:
     dataloader: DataLoader
-    featureloader: DataLoader = None
+    clip_feature_loader: DataLoader = None
+    dinov2_feature_loader: DataLoader = None
+    imagenet_feature_loader: DataLoader = None
     sampler: DistributedSampler = None
     shared_epoch: SharedEpoch = None
 
@@ -356,13 +359,16 @@ def get_geolb_dataset(args, preprocess_img, is_train, epoch=0, floor=False, toke
         shuffle_buffer_size = 1_000,
         seed = 42,)
         
-    tmodel = "openai/clip-vit-large-patch14"
-    tmodel = 'facebook/dinov2-large'
-    tmodel = "google/vit-huge-patch14-224-in21k"
+    clip_tmodel = "openai/clip-vit-large-patch14"
+    dinov2_tmodel = 'facebook/dinov2-large'
+    imagenet_tmodel = "google/vit-huge-patch14-224-in21k"
 
     shared_epoch = SharedEpoch(epoch=epoch)
 
-    feature_loader = dataloaders[tmodel]
+    clip_feature_loader = dataloaders[clip_tmodel]
+    dinov2_feature_loader = dataloaders[dinov2_tmodel]
+    imagenet_feature_loader = dataloaders[imagenet_tmodel]
+    #pdb.set_trace()
     image_loader = dataloaders["image"]
 
     N_samples = 41_172
@@ -371,15 +377,14 @@ def get_geolb_dataset(args, preprocess_img, is_train, epoch=0, floor=False, toke
     image_loader.num_batches = num_batches
     image_loader.num_samples = 41_172
 
-    feature_loader.num_batches = num_batches
-    feature_loader.num_samples = 41_172
+    clip_feature_loader.num_batches = num_batches
+    clip_feature_loader.num_samples = 41_172
+    dinov2_feature_loader.num_batches = num_batches
+    dinov2_feature_loader.num_samples = 41_172
+    imagenet_feature_loader.num_batches = num_batches
+    imagenet_feature_loader.num_samples = 41_172
 
-    #for images, features in zip(image_loader,feature_loader):
-    #    print(images["image"].shape)
-    #    print(images["text"])
-    #    print(features[tmodel]["embedding"].shape)
-
-    return DataInfo(image_loader, feature_loader, shared_epoch)
+    return DataInfo(image_loader, clip_feature_loader, dinov2_feature_loader, imagenet_feature_loader, shared_epoch)
 
 
 

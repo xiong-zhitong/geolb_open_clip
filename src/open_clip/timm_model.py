@@ -201,5 +201,5 @@ class TimmModel(nn.Module):
         else:
             x = self.trunk(x)
         x = self.head(x)
-        logger.debug(sfeats.shape)
+        #logger.debug(sfeats.shape)
         return x, sfeats

@@ -102,7 +102,6 @@ def get_input_dtype(precision: str):
         input_dtype = torch.float16
     return input_dtype
 
-
 def _build_vision_tower(
         embed_dim: int,
         vision_cfg: CLIPVisionCfg,
@@ -337,6 +336,7 @@ class CustomTextCLIP(nn.Module):
         self.text = _build_text_tower(embed_dim, text_cfg, quick_gelu, cast_dtype)
         self.context_length = self.text.context_length
         self.vocab_size = self.text.vocab_size
+        #self.translators = self.get_translators()
         self.logit_scale = nn.Parameter(torch.ones([]) * init_logit_scale)
         if init_logit_bias is not None:
             self.logit_bias = nn.Parameter(torch.ones([]) * init_logit_bias)
@@ -357,7 +357,7 @@ class CustomTextCLIP(nn.Module):
 
     def encode_image(self, image, normalize: bool = False):
         features, sfeats = self.visual(image)
-        logger.debug(sfeats.shape)
+        #logger.debug(sfeats.shape)
         out = F.normalize(features, dim=-1) if normalize else features
         return (out, sfeats)
 
@@ -365,7 +365,7 @@ class CustomTextCLIP(nn.Module):
         features = self.text(text)
         return F.normalize(features, dim=-1) if normalize else features
     
-    def get_translators(tfeat_shapes, pred_channel, cuda=True):
+    def get_translators(self, tfeat_shapes, pred_channel, cuda=True):
         translators = {}
         
         for t in tfeat_shapes:
