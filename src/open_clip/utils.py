@@ -25,8 +25,8 @@ class Interpolation(nn.Module):
         hw = int(math.sqrt(x.shape[1]))
         x = rearrange(x, 'b (h w) c -> b c h w', h=hw, w=hw)
         x = interpolate(x, self.target_size)
-        hw = int(x.shape[-1])
-        x = rearrange(x, 'b c h w -> b (h w) c', h=hw, w=hw)
+        #hw = int(x.shape[-1])
+        #x = rearrange(x, 'b c h w -> b (h w) c', h=hw, w=hw)
         return x
 
 

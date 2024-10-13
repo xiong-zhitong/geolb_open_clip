@@ -6,6 +6,7 @@ from copy import deepcopy
 from dataclasses import asdict
 from pathlib import Path
 from typing import Any, Dict, Optional, Tuple, Union
+from loguru import logger
 
 import torch
 
@@ -143,7 +144,7 @@ def load_state_dict(checkpoint_path: str, map_location='cpu'):
 def load_checkpoint(
         model: Union[CLIP, CustomTextCLIP],
         checkpoint_path: str,
-        strict: bool = True,
+        strict: bool = False,
 ):
     if Path(checkpoint_path).suffix in ('.npz', '.npy'):
         # Separate path loading numpy big_vision (SigLIP) weights
@@ -174,6 +175,11 @@ def load_checkpoint(
 
     # Finally, load the massaged state_dict into model
     incompatible_keys = model.load_state_dict(state_dict, strict=strict)
+    if not strict:
+        pass
+    #TODO: add assert here
+        #for ikey in incompatible_keys:
+        #    assert "translators" in ikey or "img_projector" in ikey
     return incompatible_keys
 
 
@@ -336,7 +342,7 @@ def create_model(
 
 
 def create_loss(args):
-    if args.distill:
+    if args.distill and not args.DOFA:
         return DistillClipLoss(
             local_loss=args.local_loss,
             gather_with_grad=args.gather_with_grad,

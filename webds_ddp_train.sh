@@ -11,9 +11,13 @@ torchrun --nproc_per_node 1 -m src.open_clip_train.main \
     --save-frequency 1 \
     --dataset-type geolb \
     --warmup 1000 \
-    --lr=1e-6 \
-    --wd=0.1 \
+    --lr=1e-5 \
+    --wd=0.01 \
+    --lock-text \
     --epochs=16 \
     --siglip \
+    --DOFA \
     --model GeoLB-ViT-B-16-SigLIP \
-    --pretrained webli
+    --pretrained webli \
+    --distill-model ViT-B-16-SigLIP \
+    --distill-pretrained webli

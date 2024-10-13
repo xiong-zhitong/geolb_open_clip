@@ -8,6 +8,7 @@ import math
 from dataclasses import dataclass
 from typing import Any, Dict, Optional, Tuple, Union
 from loguru import logger
+import pdb
 
 import numpy as np
 import torch
@@ -15,6 +16,7 @@ import torch.nn.functional as F
 from torch import nn
 from torch.utils.checkpoint import checkpoint
 from functools import partial
+from einops.layers.torch import Rearrange
 
 from .hf_model import HFTextEncoder
 from .modified_resnet import ModifiedResNet
@@ -336,7 +338,13 @@ class CustomTextCLIP(nn.Module):
         self.text = _build_text_tower(embed_dim, text_cfg, quick_gelu, cast_dtype)
         self.context_length = self.text.context_length
         self.vocab_size = self.text.vocab_size
-        #self.translators = self.get_translators()
+        # hard coded dimension = 768
+        tfeat_shapes = {'openai/clip-vit-large-patch14': torch.Size([128, 256, 1024]), \
+                        'facebook/dinov2-large': torch.Size([128, 256, 1024]), \
+                        'google/vit-huge-patch14-224-in21k': torch.Size([128, 256, 1280])}
+        self.translators = self.get_translators(tfeat_shapes, embed_dim)
+        self.img_projector = self.get_img_projector(embed_dim)
+
         self.logit_scale = nn.Parameter(torch.ones([]) * init_logit_scale)
         if init_logit_bias is not None:
             self.logit_bias = nn.Parameter(torch.ones([]) * init_logit_bias)
@@ -349,6 +357,12 @@ class CustomTextCLIP(nn.Module):
 
     def lock_text_tower(self, unlocked_layers: int = 0, freeze_layer_norm: bool = True):
         self.text.lock(unlocked_layers, freeze_layer_norm)
+    
+    def get_img_projector(self, dim=768, device=None):
+        projector = nn.Linear(dim, dim)
+        if device:
+            projector = projector.to(device)
+        return projector
 
     @torch.jit.ignore
     def set_grad_checkpointing(self, enable=True):
@@ -356,27 +370,44 @@ class CustomTextCLIP(nn.Module):
         self.text.set_grad_checkpointing(enable)
 
     def encode_image(self, image, normalize: bool = False):
-        features, sfeats = self.visual(image)
-        #logger.debug(sfeats.shape)
+        if self.visual.DOFA:
+            features, sfeats = self.visual(image)
+        else:
+            features = self.visual(image)
         out = F.normalize(features, dim=-1) if normalize else features
-        return (out, sfeats)
+        if self.visual.DOFA:
+            return (out, sfeats)
+        else:
+            return out
 
     def encode_text(self, text, normalize: bool = False):
         features = self.text(text)
         return F.normalize(features, dim=-1) if normalize else features
     
-    def get_translators(self, tfeat_shapes, pred_channel, cuda=True):
-        translators = {}
+    def get_translators(self, tfeat_shapes, pred_channel, device=None):
+        translators = nn.ModuleDict()
         
         for t in tfeat_shapes:
-            modules = []
-            _, hxw, ct = tfeat_shapes[t]
+            _, hxw, target_channel_size = tfeat_shapes[t]
             hw = int(math.sqrt(hxw))
-            modules.append(Interpolation((hw, hw)))
-            modules.append(nn.Linear(pred_channel, ct))
-            translator = nn.Sequential(*modules)
-            if cuda:
-                translator = translator.cuda()
+            target_size = [pred_channel, hw, hw]
+            #modules.append(Interpolation((hw, hw))) # scale up to 16x16
+            translator = nn.Sequential(
+                Interpolation((hw, hw)),
+                nn.LayerNorm(target_size),
+                nn.Conv2d(pred_channel, pred_channel, kernel_size=3, padding=1),  # 16
+                nn.ReLU(),
+                nn.LayerNorm(target_size),
+                nn.Conv2d(pred_channel, pred_channel, kernel_size=3, padding=1),  # 16
+                nn.ReLU(),
+                nn.LayerNorm(target_size),
+                nn.Conv2d(pred_channel, target_channel_size, kernel_size=3, padding=1),  # 16
+                Rearrange("b c h w-> b (h w) c"),
+            )
+            #modules.append(nn.Linear(pred_channel, ct))
+            #translator = nn.Sequential(*modules)
+            if device:
+                translator = translator.to(device)
             translators[t] = translator
 
         return translators
@@ -395,7 +426,11 @@ class CustomTextCLIP(nn.Module):
             image: Optional[torch.Tensor] = None,
             text: Optional[torch.Tensor] = None,
     ):
-        image_features, sfeats = self.encode_image(image, normalize=True) if image is not None else None
+        sfeats = None
+        if self.visual.DOFA:
+            image_features, sfeats = self.encode_image(image, normalize=True) if image is not None else None
+        else:
+            image_features = self.encode_image(image, normalize=True) if image is not None else None
         text_features = self.encode_text(text, normalize=True) if text is not None else None
 
         if self.output_dict:
@@ -405,6 +440,7 @@ class CustomTextCLIP(nn.Module):
                 "text_features": text_features,
                 "logit_scale": self.logit_scale.exp()
             }
+
             if self.logit_bias is not None:
                 out_dict['logit_bias'] = self.logit_bias
             return out_dict

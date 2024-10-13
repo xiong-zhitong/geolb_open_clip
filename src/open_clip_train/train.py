@@ -115,7 +115,9 @@ def train_one_epoch(model, data, loss, mdloss, epoch, optimizer, scaler, schedul
         texts = texts.to(device=device, non_blocking=True)
         #get teacher feature shapes: tfeat_shapes
         #get translators
-        translators = model.get_translators(tfeat_shapes, pred_channel=768)
+        #TODO: save parameters for translators and img_projector
+        translators = model.translators
+        img_projector = model.img_projector
 
         data_time_m.update(time.time() - end)
         optimizer.zero_grad()
@@ -129,6 +131,8 @@ def train_one_epoch(model, data, loss, mdloss, epoch, optimizer, scaler, schedul
                 if args.distill:
                     with torch.no_grad():
                         dist_model_out = dist_model(images, texts)
+                        #apply projector
+                        dist_model_out["image_features"] = img_projector(dist_model_out["image_features"])
                     model_out.update({f'dist_{k}': v for k, v in dist_model_out.items()})
                 losses = loss(**model_out, output_dict=True)
 

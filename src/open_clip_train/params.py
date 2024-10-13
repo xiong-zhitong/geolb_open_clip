@@ -72,6 +72,12 @@ def parse_args(args):
         help="Whether to use sampling with replacement for webdataset shard selection."
     )
     parser.add_argument(
+        "--DOFA",
+        default=True,
+        action="store_true",
+        help="Whether use DOFA"
+    )
+    parser.add_argument(
         "--csv-separator",
         type=str,
         default="\t",

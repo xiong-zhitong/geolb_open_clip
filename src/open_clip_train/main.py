@@ -433,7 +433,7 @@ def main(args):
         return
 
     loss = create_loss(args)
-    mdloss = MDistillLoss(0.5)
+    mdloss = MDistillLoss(0.2)
 
     for epoch in range(start_epoch, args.epochs):
         if is_master(args):

@@ -202,4 +202,8 @@ class TimmModel(nn.Module):
             x = self.trunk(x)
         x = self.head(x)
         #logger.debug(sfeats.shape)
-        return x, sfeats
+        if self.DOFA:
+            return x, sfeats
+        else:
+            return x
+

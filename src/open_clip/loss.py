@@ -374,15 +374,31 @@ class SigLipLoss(nn.Module):
         if not negative_only:
             labels = 2 * torch.eye(num_logits, device=device, dtype=dtype) + labels
         return labels
+    
+    def dist_loss(self, teacher_logits, student_logits):
+        return -(torch.nn.functional.cosine_similarity(student_logits, teacher_logits.detach(), dim=1).mean())
+        #return -(teacher_logits.softmax(dim=1) * student_logits.log_softmax(dim=1)).sum(dim=1).mean(dim=0)
 
     def get_logits(self, image_features, text_features, logit_scale, logit_bias=None):
-        logits = logit_scale * image_features @ text_features.T
+        #logits = logit_scale * image_features @ text_features.T
+        logits_per_image = logit_scale * image_features @ text_features.T
+        logits_per_text = logit_scale * text_features @ image_features.T
         if logit_bias is not None:
-            logits += logit_bias
-        return logits
+            logits = logit_bias + logits_per_image
+        return logits, logits_per_image, logits_per_text
 
-    def _loss(self, image_features, text_features, logit_scale, logit_bias=None, negative_only=False):
-        logits = self.get_logits(image_features, text_features, logit_scale, logit_bias)
+    def _loss(self, image_features, text_features, logit_scale, logit_bias, dist_image_features, dist_text_features, \
+        dist_logit_scale, dist_logit_bias=None, negative_only=False):
+        logits, logits_per_image, logits_per_text = self.get_logits(image_features, text_features, logit_scale, logit_bias)
+        _, dist_logits_per_image, dist_logits_per_text = self.get_logits(dist_image_features, dist_text_features, dist_logit_scale, dist_logit_bias)
+        #
+        distill_loss = self.dist_loss(dist_logits_per_image, logits_per_image)
+
+        #distill_loss = (
+        #    self.dist_loss(dist_logits_per_image, logits_per_image) +
+        #    self.dist_loss(dist_logits_per_text, logits_per_text)
+        #) / 2
+
         labels = self.get_ground_truth(
             image_features.device,
             image_features.dtype,
@@ -390,10 +406,13 @@ class SigLipLoss(nn.Module):
             negative_only=negative_only,
         )
         loss = -F.logsigmoid(labels * logits).sum() / image_features.shape[0]
+        loss = loss + distill_loss
         return loss
 
-    def forward(self, image_features, sfeats, text_features, logit_scale, logit_bias, output_dict=False):
-        loss = self._loss(image_features, text_features, logit_scale, logit_bias)
+    def forward(self, image_features, sfeats, text_features, logit_scale, logit_bias, dist_image_features, \
+         dist_sfeats, dist_text_features, dist_logit_scale, dist_logit_bias, output_dict=False):
+        loss = self._loss(image_features, text_features, logit_scale, logit_bias, dist_image_features,\
+            dist_text_features, dist_logit_scale, dist_logit_bias)
 
         if self.world_size > 1:
             # exchange text features w/ neighbour world_size - 1 times
